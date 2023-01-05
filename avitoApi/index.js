@@ -3,8 +3,8 @@ import * as dotenv from 'dotenv' // see https://github.com/motdotla/dotenv#how-d
 import qs from 'qs';
 import keypress from 'keypress';
 import { XMLParser } from 'fast-xml-parser';
-import * as fs from 'fs';
 import { exit } from 'process';
+import { promises as fs } from 'fs';
 dotenv.config()
 
 export default class avitoApi {
@@ -16,6 +16,7 @@ export default class avitoApi {
         loopAuth: null
     };
     #items = [];
+    #ignoreChats = [];
     #commands = [
         "getChats"
     ];
@@ -71,18 +72,14 @@ export default class avitoApi {
         if (this.#accessToken == null) {
             await this.#getToken();
         }
-
         const timer = setInterval(this.#refreshToken, 60000 * 60 * 20);
         this.#timers.loopAuth = timer
 
         console.log("Запущено обновление токенов")
     }
 
-    async loopChat() {
-
-    }
-
     async start() {
+        //console.log(this.#ignoreChats);
         this.commandLine();
         this.#loopAuth();
         this.#chatLoopAnswer();
@@ -90,6 +87,7 @@ export default class avitoApi {
 
     async #chatLoopAnswer() {
         const timer = setInterval(async () => {
+            await this.#readIgnoreChats();
             console.log("Запуск проверки сообщений");
             await this.#readItems();
             const chats = await this.#getChats();
@@ -112,7 +110,7 @@ export default class avitoApi {
         });
     }
 
-    #sendMessage(chat_id, message) {
+    async #sendMessage(chat_id, message) {
         const json = JSON.stringify({
             "message": {
                 "text": message
@@ -123,10 +121,12 @@ export default class avitoApi {
             headers: {
                 Authorization: "Bearer " + this.#accessToken
             },
-        }).catch((error) => this.#errorHandler(error, 'Не удалось отправить сообщение'))
+        }).catch((error) => this.#errorHandler(error, 'Не удалось отправить сообщение')).then(() => {
+            this.#appendIgnoreChat(chat_id);
+        })
     }
 
-    #readChat(chat_id) {
+    async #readChat(chat_id) {
         const options = {
             method: 'POST',
             headers: {
@@ -140,10 +140,11 @@ export default class avitoApi {
 
     #formatChatResponse(chats = []) {
         let chatResponses = [];
+        console.log(chats);
         chats.forEach((chat) => {
             const filter = this.#items.find((item) => {
                 return item.id == chat.context.value.id
-            });
+            })
             const chatResponse = {
                 "chat_id": chat.id,
                 "item_id": filter.id,
@@ -154,7 +155,19 @@ export default class avitoApi {
         return chatResponses;
     }
 
-    #getChats() {
+    async #readIgnoreChats() {
+        const data = await fs.readFile('ignoreChat.txt', { encoding: "utf-8", flag: 'a+' })
+        if (data) {
+            this.#ignoreChats = data.split(';') || []
+        }
+    }
+
+    async #appendIgnoreChat(chat_id) {
+        this.#ignoreChats.push(chat_id);
+        await fs.writeFile("ignoreChat.txt", this.#ignoreChats.join(";"), { flag: 'a+' })
+    }
+
+    async #getChats() {
         const options = {
             method: 'GET',
             headers: {
@@ -163,15 +176,25 @@ export default class avitoApi {
             //url: 'https://api.avito.ru/messenger/v2/accounts/' + this.userId + '/chats?per_page=100&item_ids=' + this.#stringifyItemIds(),
             url: 'https://api.avito.ru/messenger/v2/accounts/' + this.userId + '/chats?unread_only=true&per_page=100&item_ids=' + this.#stringifyItemIds(),
         };
+        let chats = [];
 
-        return axios(options).then((response) => {
+        const response = await axios(options).then((response) => {
             return response.data.chats;
         })
+        response.forEach((chat) => {
+            if (this.#ignoreChats.find((ignoreChat) => {
+                return ignoreChat == chat.id
+            })) {
+                return;
+            }
+            chats.push(chat);
+        })
+        return chats;
     }
 
-    #readItems() {
+    async #readItems() {
         const parser = new XMLParser
-        const xmlFile = fs.readFileSync('items.xml');
+        const xmlFile = await fs.readFile('items.xml');
         const items = parser.parse(xmlFile).item
         if (Array.isArray(items)) {
             this.#items = items;
@@ -209,6 +232,7 @@ export default class avitoApi {
 
         return axios(options).then((response) => {
             this.#accessToken = response.data.access_token
+            console.log(this.#accessToken);
         }).catch((error) => this.#errorHandler(error, 'Не удалось получить токен'))
     }
 
