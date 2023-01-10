@@ -103,8 +103,7 @@ export default class avitoApi {
             this.#readChat(chat.chat_id).then(() => {
                 console.log("Прочитал");
             });
-            this.#sendMessage(chat.chat_id, chat.message).then((response) => {
-                console.log(response.data, response.status);
+            this.#sendMessage(chat.chat_id, chat.message).then(() => {
                 console.log('Отправлено: ' + chat.message);
             })
         });
